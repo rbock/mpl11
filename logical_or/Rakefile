@@ -6,27 +6,14 @@ require_relative '../utility'
 ##############################################################################
 # Setup
 ##############################################################################
-VARIANTS = %w{single many}
+VARIANTS = %w{single}
 COMPILERS = Compiler.list.map(&:id)
-STRICTNESSES = %w{strict lazy}
+STRICTNESSES = %w{strict}
 
 Dir['*.hpp'].each do |file|
   Implementation.new(File.remove_ext(file)) do |impl|
     impl.headers = proc { file }
-    impl.go = -> (f, state, xs) {
-      "foldl<#{f}, #{state}, #{xs.join(', ')}>"
-    }
-  end
-end
-
-{ mpl_vector: MPL::Vector, mpl_list: MPL::List }.each do |id, sequence|
-  Implementation.new(id) do |impl|
-    impl.headers = -> (max_sequence_size) {
-      sequence.headers(max_sequence_size) + ["boost/mpl/fold.hpp"]
-    }
-    impl.go = -> (f, state, xs) {
-      "boost::mpl::fold<#{sequence.new(xs)}, #{state}, #{f}>"
-    }
+    impl.go = -> (xs) { "or_<#{xs.join(', ')}>" }
   end
 end
 
@@ -44,8 +31,7 @@ CLOBBER.include('plot/*')
 ##############################################################################
 # Plots
 ##############################################################################
-{ 'until'    => 'mpl11_until*',
-  'variadic' => 'mpl11_variadic*',
+{
   'all'      => '*'
 }.each do |name, pattern|
   plot(/^plot\/.+\/#{name}$/ => [
@@ -66,11 +52,5 @@ end
 # Datasets
 ##############################################################################
 quick_dataset(:single, 1..800) do |n|
-  [(1..n).map(&:to_s).map { |i| "x<#{i}>" }]
-end
-
-quick_dataset(:many, 1..300) do |n|
-  (1..n).map { |k|
-    (1..10).map(&:to_s).map { |i| "x<#{k}, #{i}>" }
-  }
+  [(n-1).times.map { 'false_' } << 'true_']
 end

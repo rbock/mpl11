@@ -30,6 +30,6 @@ struct x { using type = x; };
 <%= implementation.includes(sequences.map(&:size).max).join("\n") %>
 <% sequences.each_with_index do |xs, n| %>
 
-    using <%= "go#{n}" %> = <%= implementation.fold['f', 'state', xs] %>::type;
+    using <%= "go#{n}" %> = <%= implementation.go['f', 'state', xs] %>::type;
 
 <% end %>

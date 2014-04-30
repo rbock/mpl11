@@ -50,7 +50,10 @@ end
 # Utilities
 ##############################################################################
 require 'delegate'
+require 'erb'
+require 'gnuplot'
 require 'ruby-progressbar'
+require 'timeout'
 
 
 class Skip < Exception; end
@@ -161,4 +164,122 @@ def stop_after_consecutive(n, skip, stop)
       result
     end
   }
+end
+
+class Implementation
+  @@implementations = Hash.new
+
+  def self.list
+    @@implementations.values
+  end
+
+  def self.[](id)
+    if !@@implementations.has_key? id.to_sym
+      raise ArgumentError, "unknown implementation #{id}"
+    end
+    @@implementations[id.to_sym]
+  end
+
+  def self.[]=(id, impl)
+    if @@implementations.has_key? id.to_sym
+      raise ArgumentError,
+            "overwriting existing implementation #{id} with #{impl}"
+    end
+    @@implementations[id.to_sym] = impl
+  end
+
+
+  def initialize(id)
+    @id = id.to_sym
+    Implementation[@id] = self
+    yield self if block_given?
+  end
+
+  attr_accessor :headers, :go
+  attr_reader :id
+
+  def includes(*args)
+    [*headers.call(*args)].map { |hdr| "#include <#{hdr}>" }
+  end
+end
+
+def plot(*rule_args)
+  pattern, args, deps = Rake.application.resolve_args(rule_args)
+  deps << proc { |name| (directory File.dirname(name)).name }
+
+  rule(pattern, args => deps) do |rule|
+    dataset_columns = -> (*indices) {
+      rule.prerequisites.select(&File.method(:file?)).map do |file|
+        Gnuplot::DataSet.new("\"#{file}\" using #{indices.join(':')}") do |ds|
+          ds.with = "lines"
+          _, ds.title = file.split('/', 2) # remove dataset/ part
+        end
+      end
+    }
+
+    Gnuplot.open do |io|
+      Gnuplot::Plot.new(io) do |plot|
+        plot.ylabel 'Compilation time'
+        plot.format 'y "%f s"'
+        plot.term   'png'
+        plot.xrange '[0:300]'
+        plot.output rule.name + '.time.png'
+        plot.data = dataset_columns[1, 2]
+        yield plot, :time if block_given?
+      end
+    end
+
+    Gnuplot.open do |io|
+      Gnuplot::Plot.new(io) do |plot|
+        plot.ylabel 'Memory usage'
+        plot.decimal "locale 'en_US.UTF-8'"
+        plot.format 'y "%\'.0f kb"'
+        plot.xrange '[0:300]'
+        plot.term   'png'
+        plot.output rule.name + '.memusg.png'
+        plot.data = dataset_columns[1, 3]
+        yield plot, :memusg if block_given?
+      end
+    end
+  end
+end
+
+def dataset(xs, *rule_args)
+  pattern, args, deps = Rake.application.resolve_args(rule_args)
+  deps << proc { |name| (directory File.dirname(name)).name }
+
+  rule(pattern, args => deps) do |ds|
+    _, variant, cc, *_ = ds.name.split('/')
+
+    compile = stop_after_consecutive(3, Skip, Done) do |*args|
+      on([Skip, CompilationError], Skip) do
+        Timeout::timeout(10, Skip) do
+          code = yield ds, *args
+          Compiler[cc].compile_code(code,
+            include: ["~/code/mpl11/include", Dir.getwd])
+        end
+      end
+    end
+
+    stats = gather_dataset(xs, progressbar_title: ds.name, &compile)
+    stats.map! { |x, stat| "#{x} #{stat.wall_time} #{stat.peak_memusg}" }
+    IO.write(ds.name, stats.join("\n"))
+  end
+end
+
+def quick_dataset(ds, xs)
+  main = ERB.new(File.read("main.cpp"))
+  main.filename = "main.cpp"
+
+  dataset(xs, /dataset\/#{ds}/ => [
+    proc { |name|
+      header = File.sub_ext(File.basename(name), '.hpp')
+      [File.file?(header) ? header : nil, 'main.cpp'].compact
+    }
+  ]) do |file, n|
+    _, _, cc, strictness, impl = file.name.split('/')
+    implementation = Implementation[impl]
+    sequences = yield n
+    main.result(binding)
+  end
 end
