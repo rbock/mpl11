@@ -1,6 +1,7 @@
 ##############################################################################
 # Extensions
 ##############################################################################
+require 'gnuplot'
 require 'pathname'
 
 
@@ -45,13 +46,18 @@ class Numeric
   end
 end
 
+class Gnuplot::DataSet
+  def self.from_file(file, using: [1, 2], &block)
+    self.new("\"#{file}\" using #{using.join(':')}", &block)
+  end
+end
+
 
 ##############################################################################
 # Utilities
 ##############################################################################
 require 'delegate'
 require 'erb'
-require 'gnuplot'
 require 'ruby-progressbar'
 require 'timeout'
 
@@ -106,17 +112,19 @@ module MPL
 
     def self.headers(n)
       [
-        "boost/mpl/vector/vector#{[n.round_up(1), 50].min}.hpp",
-        n > 50 ? "boost/mpl/vector/aux_/item.hpp" : nil
+        "<boost/mpl/vector/vector#{[n.round_up(1), 50].min}.hpp>",
+        n > 50 ? "<boost/mpl/vector/aux_/item.hpp>" : nil
       ].compact
     end
   end
 
   class List < Sequence
     def to_s
-      init, tail = map(&:to_s)[0...-50], map(&:to_s).last(50)
+      tail = map(&:to_s).last(50)
+      init = map(&:to_s).first([size - tail.size, 0].max)
       listN = "boost::mpl::list#{tail.size}<#{tail.join(', ')}>"
-      init.zip(51..Float::INFINITY).foldr(listN) do |x_size, tail|
+
+      init.reverse.zip(51..Float::INFINITY).foldl(listN) do |tail, x_size|
         x, size = x_size
         # we emulate mpl::push_front
         "boost::mpl::l_item<boost::mpl::long_<#{size}>, #{x}, #{tail}>"
@@ -125,8 +133,8 @@ module MPL
 
     def self.headers(n)
       [
-        "boost/mpl/list/list#{[n.round_up(1), 50].min}.hpp",
-        n > 50 ? "boost/mpl/list/aux_/item.hpp" : nil
+        "<boost/mpl/list/list#{[n.round_up(1), 50].min}.hpp>",
+        n > 50 ? "<boost/mpl/list/aux_/item.hpp>" : nil
       ].compact
     end
   end
@@ -166,81 +174,13 @@ def stop_after_consecutive(n, skip, stop)
   }
 end
 
-class Implementation
-  @@implementations = Hash.new
-
-  def self.list
-    @@implementations.values
-  end
-
-  def self.[](id)
-    if !@@implementations.has_key? id.to_sym
-      raise ArgumentError, "unknown implementation #{id}"
-    end
-    @@implementations[id.to_sym]
-  end
-
-  def self.[]=(id, impl)
-    if @@implementations.has_key? id.to_sym
-      raise ArgumentError,
-            "overwriting existing implementation #{id} with #{impl}"
-    end
-    @@implementations[id.to_sym] = impl
-  end
-
-
-  def initialize(id)
-    @id = id.to_sym
-    Implementation[@id] = self
-    yield self if block_given?
-  end
-
-  attr_accessor :headers, :go
-  attr_reader :id
-
-  def includes(*args)
-    [*headers.call(*args)].map { |hdr| "#include <#{hdr}>" }
-  end
-end
-
-def plot(*rule_args)
+def rule_with_match(*rule_args)
   pattern, args, deps = Rake.application.resolve_args(rule_args)
-  deps << proc { |name| (directory File.dirname(name)).name }
-
-  rule(pattern, args => deps) do |rule|
-    dataset_columns = -> (*indices) {
-      rule.prerequisites.select(&File.method(:file?)).map do |file|
-        Gnuplot::DataSet.new("\"#{file}\" using #{indices.join(':')}") do |ds|
-          ds.with = "lines"
-          _, ds.title = file.split('/', 2) # remove dataset/ part
-        end
-      end
-    }
-
-    Gnuplot.open do |io|
-      Gnuplot::Plot.new(io) do |plot|
-        plot.ylabel 'Compilation time'
-        plot.format 'y "%f s"'
-        plot.term   'png'
-        plot.xrange '[0:300]'
-        plot.output rule.name + '.time.png'
-        plot.data = dataset_columns[1, 2]
-        yield plot, :time if block_given?
-      end
-    end
-
-    Gnuplot.open do |io|
-      Gnuplot::Plot.new(io) do |plot|
-        plot.ylabel 'Memory usage'
-        plot.decimal "locale 'en_US.UTF-8'"
-        plot.format 'y "%\'.0f kb"'
-        plot.xrange '[0:300]'
-        plot.term   'png'
-        plot.output rule.name + '.memusg.png'
-        plot.data = dataset_columns[1, 3]
-        yield plot, :memusg if block_given?
-      end
-    end
+  deps.map! { |dep|
+    Proc === dep ? proc { |name| dep.call(name, pattern.match(name)) } : dep
+  }
+  rule(pattern, args => deps) do |rule, args|
+    yield rule, args, pattern.match(rule.name) if block_given?
   end
 end
 
@@ -248,38 +188,74 @@ def dataset(xs, *rule_args)
   pattern, args, deps = Rake.application.resolve_args(rule_args)
   deps << proc { |name| (directory File.dirname(name)).name }
 
-  rule(pattern, args => deps) do |ds|
-    _, variant, cc, *_ = ds.name.split('/')
+  rule_with_match(pattern, args => deps) do |rule, args, match|
+    file = ERB.new(File.read(rule.source))
+    file.filename = rule.source
+    includes = rule.prerequisites
+              .select { |hdr| File.extname(hdr) == '.hpp' && File.file?(hdr) }
+              .map(&File.method(:dirname)) << "~/code/mpl11/include"
 
-    compile = stop_after_consecutive(3, Skip, Done) do |*args|
+    compile = stop_after_consecutive(3, Skip, Done) do |x|
+      code = file.result(yield x, match)
       on([Skip, CompilationError], Skip) do
         Timeout::timeout(10, Skip) do
-          code = yield ds, *args
-          Compiler[cc].compile_code(code,
-            include: ["~/code/mpl11/include", Dir.getwd])
+          Compiler[match[:compiler]].compile_code(code, include: includes)
         end
       end
     end
 
-    stats = gather_dataset(xs, progressbar_title: ds.name, &compile)
+    stats = gather_dataset(xs, progressbar_title: rule.name, &compile)
     stats.map! { |x, stat| "#{x} #{stat.wall_time} #{stat.peak_memusg}" }
-    IO.write(ds.name, stats.join("\n"))
+    IO.write(rule.name, stats.join("\n"))
   end
 end
 
-def quick_dataset(ds, xs)
-  main = ERB.new(File.read("main.cpp"))
-  main.filename = "main.cpp"
-
-  dataset(xs, /dataset\/#{ds}/ => [
-    proc { |name|
-      header = File.sub_ext(File.basename(name), '.hpp')
-      [File.file?(header) ? header : nil, 'main.cpp'].compact
+def memusg(*datasets, io: IO.popen(Gnuplot.gnuplot, 'w+'))
+  Gnuplot::Plot.new(io) do |plot|
+    plot.ylabel 'Memory usage'
+    plot.decimal "locale 'en_US.UTF-8'"
+    plot.format 'y "%\'.0f kb"'
+    plot.data = datasets.map { |file|
+      Gnuplot::DataSet.from_file(file, using: [1, 3]) { |ds|
+        ds.title = file.sub(/dataset\//, '')
+        ds.with = 'lines'
+      }
     }
-  ]) do |file, n|
-    _, _, cc, strictness, impl = file.name.split('/')
-    implementation = Implementation[impl]
-    sequences = yield n
-    main.result(binding)
+    yield plot if block_given?
+  end
+end
+
+def time(*datasets, io: IO.popen(Gnuplot.gnuplot, 'w+'))
+  Gnuplot::Plot.new(io) do |plot|
+    plot.ylabel 'Compilation time'
+    plot.format 'y "%f s"'
+    plot.data = datasets.map { |file|
+      Gnuplot::DataSet.from_file(file) { |ds|
+        ds.title = file.sub(/dataset\//, '')
+        ds.with = 'lines'
+      }
+    }
+    yield plot if block_given?
+  end
+end
+
+def plot(*rule_args)
+  pattern, args, deps = Rake.application.resolve_args(rule_args)
+  deps << proc { |name| (directory File.dirname(name)).name }
+
+  rule_with_match(pattern, args => deps) do |rule, args|
+    datasets = rule.prerequisites.select(&File.method(:file?))
+
+    time(*datasets)   { |plot|
+      plot.term   'png'
+      plot.output rule.name + '.time.png'
+      yield :time, plot if block_given?
+    }
+
+    memusg(*datasets) { |plot|
+      plot.term   'png'
+      plot.output rule.name + '.memusg.png'
+      yield :memusg, plot if block_given?
+    }
   end
 end

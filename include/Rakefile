@@ -1,24 +1,24 @@
 require 'benchmark'
-require_relative '../utilities'
+require_relative '../compiler'
+Dir.chdir(File.dirname(File.dirname(__FILE__)))
 
 
 task :default => [:include]
-task :include => Compiler.list.map { |cc| "#{cc.id}.include" }
 
-# compiler.include
-rule(/.+\.include$/) do |r|
-  cc = Compiler[r.name.split('.').first]
+Compiler.list.each do |cc|
+  task :include => ["include/#{cc.id}"]
+  rule "include/#{cc.id}" do
+    cc.compile_file('include/mpl11.cpp') # rehearse
+    mpl11 = cc.compile_file('include/mpl11.cpp', &Benchmark.method(:realtime))
 
-  cc.compile_file("mpl11.cpp") # rehearse
-  mpl11 = cc.compile_file("mpl11.cpp", &Benchmark.method(:realtime))
+    cc.compile_file('include/mpl.cpp') # rehearse
+    mpl = cc.compile_file('include/mpl.cpp', &Benchmark.method(:realtime))
 
-  cc.compile_file("mpl.cpp") # rehearse
-  mpl = cc.compile_file("mpl.cpp", &Benchmark.method(:realtime))
-
-  puts <<-EOS
-Including the whole library with #{cc}:
-mpl:       #{mpl} s
-mpl11:     #{mpl11} s
-mpl/mpl11: #{mpl/mpl11}
-EOS
+    puts <<-EOS
+  Including the whole library with #{cc}:
+  mpl:       #{mpl} s
+  mpl11:     #{mpl11} s
+  mpl/mpl11: #{mpl/mpl11}
+  EOS
+  end
 end

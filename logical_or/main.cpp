@@ -4,13 +4,10 @@ using boost::mpl11::true_;
 using boost::mpl11::false_;
 
 
-<%= implementation.includes.join("\n") %>
-
+<% max_size = sequences.map(&:size).max %>
+<%= [*HEADERS.call(max_size)].map { |hdr| "#include #{hdr}" }.join("\n") %>
 <% sequences.each do |xs| %>
 
-    static_assert(<%= implementation.go[xs] %> ::value
-                            ==
-                        <%= xs.any? %>
-    , "");
+    static_assert(<%= OR[xs] %>::value == <%= xs.any? %>, "");
 
 <% end %>

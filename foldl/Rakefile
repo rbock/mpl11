@@ -1,76 +1,54 @@
-require 'rake/clean'
 require_relative '../compiler'
 require_relative '../utility'
+Dir.chdir(File.dirname(File.dirname(__FILE__)))
 
 
-##############################################################################
-# Setup
-##############################################################################
-VARIANTS = %w{single many}
-COMPILERS = Compiler.list.map(&:id)
-STRICTNESSES = %w{strict lazy}
+task :default => ['foldl.wide', 'foldl.deep']
 
-Dir['*.hpp'].each do |file|
-  Implementation.new(File.remove_ext(file)) do |impl|
-    impl.headers = proc { file }
-    impl.go = -> (f, state, xs) {
-      "foldl<#{f}, #{state}, #{xs.join(', ')}>"
-    }
-  end
-end
+implementations = Dir['foldl/*.rb'].map { |file|
+  File.remove_ext(File.basename(file))
+}
 
-{ mpl_vector: MPL::Vector, mpl_list: MPL::List }.each do |id, sequence|
-  Implementation.new(id) do |impl|
-    impl.headers = -> (max_sequence_size) {
-      sequence.headers(max_sequence_size) + ["boost/mpl/fold.hpp"]
-    }
-    impl.go = -> (f, state, xs) {
-      "boost::mpl::fold<#{sequence.new(xs)}, #{state}, #{f}>"
-    }
-  end
-end
-
-def DATASETS(pattern = '*')
-  VARIANTS.product(COMPILERS, STRICTNESSES, Implementation.list.map(&:id))
-          .map { |args| File.join(*args.map(&:to_s)) }
-          .select { |path| File.fnmatch?(pattern, path) }
-          .map(&'dataset/'.method(:+))
-end
-
-CLEAN.include('dataset/*')
-CLOBBER.include('plot/*')
-
-
-##############################################################################
-# Plots
-##############################################################################
-{ 'until'    => 'mpl11_until*',
-  'variadic' => 'mpl11_variadic*',
-  'all'      => '*'
-}.each do |name, pattern|
-  plot(/^plot\/.+\/#{name}$/ => [
-    proc { |name|
-      _, variant, cc, strictness, _ = name.split('/')
-      DATASETS("#{variant}/#{cc}/#{strictness}/#{pattern}")
-    }
-  ])
-
-  task :default => [name]
-  task name => VARIANTS.product(COMPILERS, STRICTNESSES).map { |*mid|
-    "plot/#{mid.join('/')}/#{name}"
+%w{deep wide}.product(Compiler.list.map(&:id), %w{strict lazy}) do |kind, cc, strictness|
+  foldl = "foldl.#{kind}/#{cc}/#{strictness}"
+  datasets = -> (re) {
+    implementations.grep(re).map { |impl| "dataset/#{foldl}/#{impl}" }
   }
+
+
+  plot("plot/#{foldl}/variadic" => datasets[/mpl11_variadic/])
+  task "foldl.#{kind}" => ["plot/#{foldl}/variadic"]
+
+
+  plot("plot/#{foldl}/until" => datasets[/mpl11_until/])
+  task "foldl.#{kind}" => ["plot/#{foldl}/until"]
+
+
+  plot("plot/#{foldl}/categories" => datasets[/aliased|bounded/])
+  task "foldl.#{kind}" => ["plot/#{foldl}/categories"]
+
+
+  plot("plot/#{foldl}/mpl" => datasets[/list|vector|cons/])
+  task "foldl.#{kind}" => ["plot/#{foldl}/mpl"]
 end
 
 
-##############################################################################
-# Datasets
-##############################################################################
-quick_dataset(:single, 1..800) do |n|
-  [(1..n).map(&:to_s).map { |i| "x<#{i}>" }]
+dataset(1..800, /dataset\/foldl\.deep\/(?<compiler>.+)\/(?<strictness>strict|lazy)\/(?<impl>.+)/ => [
+  'foldl/main.cpp', proc { |_, match| "foldl/#{match[:impl]}.rb" }
+]) do |n, match|
+  require_relative "#{match[:impl]}.rb"
+  strictness = match[:strictness]
+  sequences = [(1..n).map(&:to_s).map { |i| "x<#{i}>" }]
+  binding
 end
 
-quick_dataset(:many, 1..300) do |n|
-  (1..n).map { |k|
+dataset(1..300, /dataset\/foldl\.wide\/(?<compiler>.+)\/(?<strictness>strict|lazy)\/(?<impl>.+)/ => [
+  'foldl/main.cpp', proc { |_, match| "foldl/#{match[:impl]}.rb" }
+]) do |n, match|
+  require_relative "#{match[:impl]}.rb"
+  sequences = (1..n).map { |k|
     (1..10).map(&:to_s).map { |i| "x<#{k}, #{i}>" }
   }
+  strictness = match[:strictness]
+  binding
 end

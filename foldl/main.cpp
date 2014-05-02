@@ -1,4 +1,6 @@
 #define BOOST_MPL11_NO_ASSERTIONS
+<% max_size = sequences.map(&:size).max %>
+<%= [*HEADERS.call(max_size)].map { |hdr| "#include #{hdr}" }.join("\n") %>
 
 template <typename ...>
 struct result { using type = result; };
@@ -27,9 +29,8 @@ struct state { using type = state; };
 template <int ...>
 struct x { using type = x; };
 
-<%= implementation.includes(sequences.map(&:size).max).join("\n") %>
 <% sequences.each_with_index do |xs, n| %>
 
-    using <%= "go#{n}" %> = <%= implementation.go['f', 'state', xs] %>::type;
+    using <%= "go#{n}" %> = <%= FOLDL['f', 'state', xs] %>::type;
 
 <% end %>

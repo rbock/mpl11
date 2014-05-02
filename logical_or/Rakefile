@@ -1,56 +1,28 @@
-require 'rake/clean'
 require_relative '../compiler'
 require_relative '../utility'
+Dir.chdir(File.dirname(File.dirname(__FILE__)))
 
 
-##############################################################################
-# Setup
-##############################################################################
-VARIANTS = %w{single}
-COMPILERS = Compiler.list.map(&:id)
-STRICTNESSES = %w{strict}
+task :default => ['logical_or']
 
-Dir['*.hpp'].each do |file|
-  Implementation.new(File.remove_ext(file)) do |impl|
-    impl.headers = proc { file }
-    impl.go = -> (xs) { "or_<#{xs.join(', ')}>" }
-  end
-end
+implementations = Dir['logical_or/*.rb'].map { |file|
+  File.remove_ext(File.basename(file))
+}
 
-def DATASETS(pattern = '*')
-  VARIANTS.product(COMPILERS, STRICTNESSES, Implementation.list.map(&:id))
-          .map { |args| File.join(*args.map(&:to_s)) }
-          .select { |path| File.fnmatch?(pattern, path) }
-          .map(&'dataset/'.method(:+))
-end
-
-CLEAN.include('dataset/*')
-CLOBBER.include('plot/*')
-
-
-##############################################################################
-# Plots
-##############################################################################
-{
-  'all'      => '*'
-}.each do |name, pattern|
-  plot(/^plot\/.+\/#{name}$/ => [
-    proc { |name|
-      _, variant, cc, strictness, _ = name.split('/')
-      DATASETS("#{variant}/#{cc}/#{strictness}/#{pattern}")
-    }
-  ])
-
-  task :default => [name]
-  task name => VARIANTS.product(COMPILERS, STRICTNESSES).map { |*mid|
-    "plot/#{mid.join('/')}/#{name}"
+Compiler.list.map(&:id).each do |cc|
+  datasets = -> (re) {
+    implementations.grep(re).map { |impl| "dataset/logical_or/#{cc}/#{impl}" }
   }
+
+  task :logical_or => ["plot/logical_or/#{cc}"]
+  plot("plot/logical_or/#{cc}" => datasets[/.*/])
 end
 
 
-##############################################################################
-# Datasets
-##############################################################################
-quick_dataset(:single, 1..800) do |n|
-  [(n-1).times.map { 'false_' } << 'true_']
+dataset(1..1000, /dataset\/logical_or\/(?<compiler>.+)\/(?<impl>.+)/ => [
+  'logical_or/main.cpp', proc { |_, match| "logical_or/#{match[:impl]}.rb" }
+]) do |n, match|
+  require_relative "#{match[:impl]}.rb"
+  sequences = [(n-1).times.map { 'false_' } << 'true_']
+  binding
 end
