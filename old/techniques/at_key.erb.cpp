@@ -12,8 +12,8 @@ struct pair { };
     when :multiple_inheritance %>
 
     // ldionne:
-    // I first encountered this technique in a post by Augustin Bergé on
-    // the Boost mailing list. Thanks!
+    // I first encountered this technique in a post by Agustín Bergé on
+    // the Boost.Dev mailing list. Thanks!
     template <typename ...Pairs>
     struct map : Pairs... {
         template <typename Key, typename Value>
