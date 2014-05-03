@@ -156,7 +156,7 @@ class GccFrontend < Compiler
   end
 
   def compile_file(file, include: [])
-    flags = "-std=c++11 -o /dev/null -fsyntax-only -ftime-report"
+    flags = "-std=c++1y -o /dev/null -fsyntax-only -ftime-report"
     includes = include.map(&'-I '.method(:+)).join(' ')
     cli = "#{@binary} #{flags} #{includes} -c #{file}"
 

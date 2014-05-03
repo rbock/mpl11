@@ -77,7 +77,11 @@ def gather_dataset(xs, progressbar_title: 'Progress', rehearsals: 2)
   xs = xs.to_a
   progress = ProgressBar.create(format: "#{progressbar_title} %p%% | %B |",
                                 total: xs.size)
-  rehearsals.times { yield xs.first } unless xs.empty? # rehearse
+  catch Done do
+    catch Skip do
+      rehearsals.times { yield xs.first } unless xs.empty? # rehearse
+    end
+  end
 
   data = []
   catch Done do
