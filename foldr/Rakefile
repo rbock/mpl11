@@ -1,0 +1,42 @@
+require_relative '../compiler'
+require_relative '../utility'
+Dir.chdir(File.dirname(File.dirname(__FILE__)))
+
+
+task :default => ['foldr.wide', 'foldr.deep']
+
+implementations = Dir['foldr/*.rb'].map { |file|
+  File.remove_ext(File.basename(file))
+}
+
+%w{deep wide}.product(Compiler.list.map(&:id), %w{strict lazy}) do |kind, cc, strictness|
+  foldr = "foldr.#{kind}/#{cc}/#{strictness}"
+  datasets = -> (re) {
+    implementations.grep(re).map { |impl| "dataset/#{foldr}/#{impl}" }
+  }
+
+
+  plot("plot/#{foldr}/variadic" => datasets[/mpl11_variadic/])
+  task "foldr.#{kind}" => ["plot/#{foldr}/variadic"]
+end
+
+
+dataset(1..800, /dataset\/foldr\.deep\/(?<compiler>.+)\/(?<strictness>strict|lazy)\/(?<impl>.+)/ => [
+  'foldr/main.cpp', proc { |_, match| "foldr/#{match[:impl]}.rb" }
+]) do |n, match|
+  require_relative "#{match[:impl]}.rb"
+  strictness = match[:strictness]
+  sequences = [(1..n).map(&:to_s).map { |i| "x<#{i}>" }]
+  binding
+end
+
+dataset(1..300, /dataset\/foldr\.wide\/(?<compiler>.+)\/(?<strictness>strict|lazy)\/(?<impl>.+)/ => [
+  'foldr/main.cpp', proc { |_, match| "foldr/#{match[:impl]}.rb" }
+]) do |n, match|
+  require_relative "#{match[:impl]}.rb"
+  strictness = match[:strictness]
+  sequences = (1..n).map { |k|
+    (1..10).map(&:to_s).map { |i| "x<#{k}, #{i}>" }
+  }
+  binding
+end
